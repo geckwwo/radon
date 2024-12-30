@@ -1,0 +1,6 @@
+import asyncio;
+
+asyncio.run((lambda() @async
+    await asyncio.sleep(1);
+    print("Hello, async world!");
+end)());
