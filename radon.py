@@ -83,7 +83,7 @@ if __name__ == "__main__":
                 else:
                     if isinstance(pyast.body[0], pythonast.Expr):
                         if (rv := eval(compile(pythonast.Expression(pyast.body[0].value), "<stdin>", "eval"))) is not None:
-                            print(rv)
+                            print(repr(rv))
                     else:
                         exec(compile(pyast, "<stdin>", "exec"))
             except:
