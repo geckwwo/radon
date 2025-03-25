@@ -17,8 +17,8 @@ class TokenType(enum.Enum):
     RPAR = ")"
     LBRK = "["
     RBRK = "]"
-    LANG = "<"
-    RANG = ">"
+    LCUR = "{"
+    RCUR = "}"
 
     DOT = "."
     COMMA = ","
@@ -29,6 +29,7 @@ class TokenType(enum.Enum):
     MULTIPLY = "*"
     DIVIDE = "/"
     MOD = "%"
+    COLON = ":"
 
     ASSIGN = 100
 
@@ -60,6 +61,7 @@ class Keyword(enum.Enum):
     FN = "fn"
     END = "end"
     AWAIT = "await"
+    CLASS = "class"
 
 TOKENTYPES = [i.value for i in TokenType]
 KEYWORDS = [i.value for i in Keyword]
@@ -203,6 +205,8 @@ class Parser:
                 return self.kw_import()
             elif self.tok.value in (Keyword.LAMBDA, Keyword.AWAIT):
                 pass
+            elif self.tok.value == Keyword.CLASS:
+                return self.kw_class()
             else:
                 assert False, f"keyword {self.tok} cannot be used here"
         v = self.expr()
@@ -213,10 +217,40 @@ class Parser:
                 assert False, "assignment to this expression is not supported"
             self.next_tok()
             v = NodeAssign([v], self.expr(), lineno=v.lineno, col_offset=v.col_offset)
+
+            assert self.tok.type == TokenType.SEMICOLON, f"';' expected, got {self.tok}"
+            self.next_tok()
+            return v
+            
         assert self.tok.type == TokenType.SEMICOLON, f"';' expected, got {self.tok}"
         self.next_tok()
         return NodeExpr(v, lineno=v.lineno, col_offset=v.col_offset)
     
+    def kw_class(self):
+        ln, co = self.tok.line, self.tok.offset
+        self.next_tok()
+
+        name = self.get_iden()
+        body = []
+        bases = []
+
+        if self.tok.type == TokenType.LPAR:
+            self.next_tok()
+            while True:
+                if self.tok.type == TokenType.RPAR:
+                    self.next_tok()
+                    break
+                bases.append(self.expr())
+                if self.tok.type != TokenType.RPAR:
+                    assert self.tok.type == TokenType.COMMA, "',' or ')' expected"
+                    self.next_tok()
+        
+        while self.tok.value != Keyword.END:
+            body.append(self.statement())
+        self.next_tok()
+
+        return NodeClassDef(name, body, bases, [], lineno=ln, col_offset=co)
+
     def kw_import(self):
         assert self.tok.value == Keyword.IMPORT, f"'import' expected, got {self.tok}"
         ln, co = self.tok.line, self.tok.offset
@@ -311,7 +345,17 @@ class Parser:
             op = {TokenType.MULTIPLY: BinOp.MUL, TokenType.DIVIDE: BinOp.DIV}[self.tok.type]
             self.next_tok()
             left = NodeBinOp(left, op, self.expr_mul_div(), lineno=left.lineno, col_offset=left.col_offset)
-        return left    
+        return left
+    def eslice(self, lower):
+        self.next_tok()
+        upper = None
+        step = None
+        if self.tok.type != TokenType.RBRK:
+            upper = self.expr()
+            if self.tok.type == TokenType.COLON:
+                self.next_tok()
+                step = self.expr()
+        return NodeSlice(lower, upper, step, lineno=self.tok.line, col_offset=self.tok.offset)
     def expr_idx_attr_call(self):
         left = self.expr_final()
         while self.tok.type in (TokenType.DOT, TokenType.LPAR, TokenType.LBRK):
@@ -322,7 +366,12 @@ class Parser:
                 self.next_tok()
             elif self.tok.type == TokenType.LBRK:
                 self.next_tok()
-                index = self.expr()
+                if self.tok.type == TokenType.COLON:
+                    index = self.eslice(None)
+                else:
+                    index = self.expr()
+                    if self.tok.type == TokenType.COLON:
+                        index = self.eslice(index)
                 assert self.tok.type == TokenType.RBRK, f"']' expected, got {self.tok}"
                 self.next_tok()
                 left = NodeIndex(left, index, "load", lineno=self.tok.line, col_offset=self.tok.offset)
@@ -392,6 +441,26 @@ class Parser:
                 else:
                     self.next_tok()
             return NodeList(args, "load", lineno=ln, col_offset=co)
+        elif self.tok.type == TokenType.LCUR:
+            ln, co = self.tok.line, self.tok.offset
+            self.next_tok()
+            keys = []
+            values = []
+            while True:
+                if self.tok.type == TokenType.RCUR:
+                    self.next_tok()
+                    break
+                keys.append(self.expr())
+                assert self.tok.type == TokenType.COLON, "':' expected"
+                self.next_tok()
+                values.append(self.expr())
+                assert self.tok.type in (TokenType.RCUR, TokenType.COMMA), "',' or '}' expected"
+                if self.tok.type == TokenType.RCUR:
+                    self.next_tok()
+                    break
+                else:
+                    self.next_tok()
+            return NodeDict(keys, values, lineno=ln, col_offset=co)
         elif self.tok.type == TokenType.KEYWORD:
             if self.tok.value == Keyword.LAMBDA:
                 return self.kw_lambda()
@@ -404,8 +473,71 @@ class Parser:
         elif self.tok.type == TokenType.NOT:
             self.next_tok()
             return NodeUnaryOp(UnaryOp.NOT, self.expr())
+        elif self.tok.type == TokenType.LT:
+            # ex parsing mode
+            self.textmode_enter()
+            self.lexer.idx -= 1 # get the < char
+            tag = self.textmode_parse_xml_tag()
+            self.lexer.idx -= 1 # fix offset
+            self.textmode_exit()
+            return NodeList(tag, "load", lineno=self.tok.line, col_offset=self.tok.offset)
         assert False, (f"Expected atom, got {self.tok}")
     
+    def textmode_parse_xml_tag(self):
+        contents = [""]
+        attrkeys, attrvalues = [], []
+        self.next_ch()
+        self.textmode_ch = self.next_ch()
+        self.textmode_skipspace()
+        tag = self.textmode_iden()
+        self.textmode_skipspace()
+        while self.textmode_ch in string.ascii_letters + "0123456789-_":
+            attrkeys.append(NodeConst(self.textmode_iden(), lineno=self.tok.line, col_offset=self.tok.offset))
+            self.textmode_skipspace()
+            assert (x := self.textmode_ch) == "=", f"'=' expected got {x}"
+            self.textmode_exit()
+            attrvalues.append(self.expr_final())
+            self.textmode_enter()
+            self.lexer.idx -= 1
+            self.textmode_ch = self.next_ch()
+            self.textmode_skipspace()
+        assert (x := self.textmode_ch) == ">", f"tag closing expected got {x}"
+        self.textmode_ch = self.next_ch()
+        while True:
+            if self.textmode_ch == "<":
+                self.textmode_ch = self.next_ch()
+                self.textmode_skipspace()
+                if self.textmode_ch == "/":
+                    self.textmode_ch = self.next_ch()
+                    self.textmode_skipspace()
+                    tag2 = self.textmode_iden()
+                    self.textmode_skipspace()
+                    assert tag2 == tag, f"ending tag was expected to be {tag}, got {tag2}"
+                    assert (x := self.textmode_ch) == ">", f"tag closing expected got {x}"
+                    self.textmode_ch = self.next_ch()
+                    break
+                else:
+                    self.lexer.idx -= 3
+                    self.textmode_ch = self.next_ch()
+                    contents.append(NodeList(self.textmode_parse_xml_tag(), "load", lineno=self.tok.line, col_offset=self.tok.offset))
+                    contents.append("")
+            else:
+                contents[-1] += self.textmode_ch
+                self.textmode_ch = self.next_ch()
+        return [NodeConst(tag, lineno=self.tok.line, col_offset=self.tok.offset), NodeDict(attrkeys, attrvalues, lineno=self.tok.line, col_offset=self.tok.offset), *[(i if not isinstance(i, str) else NodeConst(i, lineno=self.tok.line, col_offset=self.tok.offset)) for i in contents if (i.strip() != "" if isinstance(i, str) else True)]]
+    
+    def textmode_skipspace(self):
+        while self.textmode_ch in " \n\t\r\v":
+            self.textmode_ch = self.next_ch()
+
+    def textmode_iden(self):
+        assert self.textmode_ch in string.ascii_letters + "0123456789-_", f"identifier expected got {self.textmode_ch}"
+        b = ""
+        while self.textmode_ch in string.ascii_letters + "0123456789-_":
+            b += self.textmode_ch
+            self.textmode_ch = self.next_ch()
+        return b
+
     def parse_func_args(self):
         assert self.tok.type == TokenType.LPAR, f"'(' expected"
         self.next_tok()
@@ -485,3 +617,8 @@ class Parser:
         self.next_tok()
         return v
     
+    def textmode_enter(self):
+        self.lexer.idx -= 1
+    def textmode_exit(self):
+        self.lexer._next()
+        self.next_tok()

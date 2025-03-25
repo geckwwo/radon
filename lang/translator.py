@@ -49,6 +49,8 @@ class Translator:
             BinOp.MUL: ast.Mult(),
             BinOp.DIV: ast.Div()
         }[node.op], self.visit(node.right), lineno=node.lineno, col_offset=node.col_offset)
+    def visit_NodeClassDef(self, node: NodeClassDef):
+        return ast.ClassDef(name=node.name, bases=list(map(self.visit, node.bases)), keywords=[], body=list(map(self.visit, node.body)) if len(node.body) > 0 else [ast.Pass(lineno=node.lineno, col_offset=node.col_offset)], decorator_list=[], lineno=node.lineno, col_offset=node.col_offset)
     def visit_NodeCompare(self, node: NodeCompare):
         return ast.Compare(self.visit(node.left), [{
             Comparator.EQ: ast.Eq(),
@@ -152,6 +154,8 @@ class Translator:
         return ast.Return(self.visit(node.value), lineno=node.lineno, col_offset=node.col_offset)
     def visit_NodeList(self, node: NodeList):
         return ast.List(list(map(self.visit, node.values)), ctx=ast.Load() if node.context == "load" else ast.Store(), lineno=node.lineno, col_offset=node.col_offset)
+    def visit_NodeDict(self, node: NodeDict):
+        return ast.Dict(list(map(self.visit, node.keys)), list(map(self.visit, node.values)), lineno=node.lineno, col_offset=node.col_offset)
     def visit_NodeAttr(self, node: NodeAttr):
         return ast.Attribute(self.visit(node.left), node.right, ctx=ast.Load() if node.context == "load" else ast.Store(), lineno=node.lineno, col_offset=node.col_offset)
     def visit_NodePipe(self, node: NodePipe):
@@ -173,3 +177,6 @@ class Translator:
             ast.Constant(node.as_name, lineno=node.lineno, col_offset=node.col_offset)
         ], [], lineno=node.lineno, col_offset=node.col_offset)
         return ast.Assign([ast.Name(node.what[-1] if node.as_name is None else node.as_name, ast.Store(), lineno=node.lineno, col_offset=node.col_offset)], call, lineno=node.lineno, col_offset=node.col_offset)
+
+    def visit_NodeSlice(self, node: NodeSlice):
+        return ast.Slice(self.visit(node.lower) if node.lower else None, self.visit(node.upper) if node.upper else None, self.visit(node.step) if node.step else None, lineno=node.lineno, col_offset=node.col_offset)

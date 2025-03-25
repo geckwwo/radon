@@ -62,6 +62,11 @@ class NodeIden(Node):
 class NodeConst(Node):
     value: str | int | float
 
+class NodeSlice(Node):
+    lower: Node
+    upper: Node
+    step: Node
+
 class NodeAttr(Node):
     left: Node
     right: str
@@ -104,12 +109,20 @@ class NodeAwait(Node):
 class NodeList(Node):
     values: list[Node]
     context: Literal['load'] | Literal['store']
+class NodeDict(Node):
+    keys: list[Node]
+    values: list[Node]
 class NodeTuple(Node):
     values: list[Node]
     context: Literal['load'] | Literal['store']
 class NodeAssign(Node):
     targets: list[Node]
     value: Node
+class NodeClassDef(Node):
+    name: str
+    body: list[Node]
+    bases: list[Node]
+    decorators: list[Node]
 
 class NodeImportRadon(Node):
     what: list[str]
